@@ -1,0 +1,3 @@
+.. automodule :: baricentro
+   :members:
+

@@ -1,0 +1,3 @@
+.. automodule :: Extremos 
+   :members:
+

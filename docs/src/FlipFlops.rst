@@ -1,0 +1,3 @@
+.. automodule :: FlipFlops 
+   :members:
+

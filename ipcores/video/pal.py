@@ -347,6 +347,164 @@ def pal_coord(clk27_i,
 
     """
 
+    # Info del Horiz
+    PIXELS_x_LINEA = 864          # Cantidad de pixels de una linea de video
+    PIXELS_x_LINEA_ACTIVA = 720   # Cantidad de pixels activos de una linea de video
+    PIXELS_x_SYNC_H = 64          # Cantidad de pixels del pulso de sinc h.
+    PIXELS_x_BP = 68              # Cantidad de pixels de back porch
+    INICIO_X = PIXELS_x_SYNC_H + PIXELS_x_BP - 6 # Comienzo del pixel activo en la linea (Nota el -6 es por atraso en el tracker analogico)
+
+    # Info del Vert
+    TOTAL_LINEAS   = 625     # Total de lineas del PAL
+    LINEAS_ACTIVAS = 576     # Cantidad de lineas activas de video
+
+    LINEA_INI_VIDEO_ACTIVO_ODD = 21       # Linea de comienzo del video activo en el campo impar 
+    LINEA_FIN_VIDEO_ACTIVO_ODD = 308       # Linea de finalizacion del video activo en el campo impar 
+
+    LINEA_INI_VIDEO_ACTIVO_EVEN = 334     # Linea de comienzo del video activo en el campo par 
+    LINEA_FIN_VIDEO_ACTIVO_EVEN = 621     # Linea de finalizacion del video activo en el campo par 
+
+
+    # Senales y registros
+    
+    ini_hs = Signal(False)     # Pulso de inicio de sincronismo horizontal
+    ini_vs = Signal(False)     # Inicio de sincronismo vertical 
+    pix_ce = Signal(False)     # Clock enable para contar pixels  
+
+    barrido_x = Signal(intbv(0, 0, PIXELS_x_LINEA))   # Registros para llevar la posicion del barrido    
+    nro_linea = Signal(intbv(0, 0, TOTAL_LINEAS))     # 
+
+    ini_odd = Signal(False)          # Pulso de inicio de campo impar 
+    rst_aux = Signal(False)
+    rst_n_lineas = Signal(False)     # Reset del contador de lineas
+
+    video_activo_x = Signal(False)
+    video_activo_y = Signal(False)
+
+
+    ######################################################################################################## 
+    #
+    # Horizontal
+    # ==========
+    #                   _____________                                   __________________________________
+    #    hs                          |_____________________________ ***
+    #                     _   _   _   _   _   _   _   _   _   _   _       _   _   _   _   _   _   _   _
+    #    clk @ 27MHz    _| |_| |_| |_| |_| |_| |_| |_| |_| |_| |_|  *** _| |_| |_| |_| |_| |_| |_| |_| |_|
+    #                                 ___         
+    #    ini_hs         _____________|   |_________________________ *** __________________________________  
+    #                         ___     ___     ___     ___     ___       _     ___     ___     ___     ___
+    #    pix_ce          |___|   |___|   |___|   |___|   |___|   |_ ***  |___|   |___|   |___|   |___|   |
+    #                                                                        
+    #    barrido_x       ]  862  ]  863  ]   0   ]   1   ]   2   ]  ***  ]  131  ]  132  ]  133  ]  134  ]
+    #                                                                             ________________________
+    #    video_activo_x ___________________________________________ *** _________|
+    #
+    #    pixel_x                                0                                [   0   ]   1   ]   2   ]
+    #           
+
+
+
+    gen_ini_hs = detecta_flanco_bajada(clk_i = clk27_i, 
+                                       a_i = hs_i, 
+                                       flanco_o = ini_hs)     
+
+    gen_pix_ena = FT_R(clk_i = clk27_i, 
+                       rst_i = ini_hs, 
+                       t_i = Signal(True), 
+                       q_o = pix_ce)       # Divide x2 la frec de clock
+    
+    gen_barrido_x = CB_RE(clk_i = clk27_i, 
+                          rst_i = ini_hs, 
+                          ce_i = pix_ce, 
+                          q_o = barrido_x)     # Cuenta los "pixels" (tanto activos como los de blanking)
+                                                    # en una linea de video, comenzando desde el flanco de bajada de hs   
+                  
+    @always_comb
+    def gen_video_activo_x() :    
+        if INICIO_X <= barrido_x and barrido_x < INICIO_X + PIXELS_x_LINEA_ACTIVA :    # Comparador para determinar la ventana temporal de la linea activa 
+            video_activo_x.next = True
+        else :
+            video_activo_x.next = False
+   
+
+    ########################################################################################################################
+    #
+    # Vertical
+    # ========
+    #                ___      _      _      _      _      _   ______   ______   ______   ______   ______   ____________   _
+    #   mix_sync        |____| |____| |____| |____| |____| |_|      |_|      |_|      |_|      |_|      |_|            |_|
+    #                ___   ___________   ___________   _____________   _______________   _______________   ____________   _
+    #   hs_i            |_|           |_|           |_|             |_|               |_|               |_|            |_|
+    #                ________                                          ____________________________________________________
+    #   vs_i                 |________________________________________|
+    #                         _____________________________________________________________________________________________
+    #   odd_even_i   ________|
+    #
+    #   nro_linea       ]     624     ]      0      ]       1       ]        2        ]        3        ]      4       ]
+    #
+
+
+
+    gen_ini_vs = detecta_flanco_bajada(clk_i = clk27_i, 
+                                       a_i = vs_i, 
+                                       flanco_o = ini_vs)
+
+    @always_comb
+    def gen_ini_odd() :                      # Genera un pulso al comienzo del campo impar para resetear el contador de lineas 
+        ini_odd.next = ini_vs & odd_even_i
+        
+    gen_rst_n_linea = FJK(clk_i = clk27_i, 
+                          j_i = ini_odd, 
+                          k_i = ini_hs, 
+                          q_o = rst_aux)     
+
+    @always_comb
+    def gen_rst_vert() :
+        rst_n_lineas.next = rst_aux & ini_hs          # un pulsito al comienzo del primer hs dentro del vs del campo impar 
+
+    gen_nro_linea = CB_RE(clk_i = clk27_i, 
+                          rst_i = rst_n_lineas, 
+                          ce_i = ini_hs, 
+                          q_o = nro_linea)   # Cuenta las lineas de video desde el comienzo del campo impar
+
+    @always_comb
+    def gen_video_activo_y() :    
+        if (LINEA_INI_VIDEO_ACTIVO_EVEN <= nro_linea and nro_linea <= LINEA_FIN_VIDEO_ACTIVO_EVEN) or (LINEA_INI_VIDEO_ACTIVO_ODD <= nro_linea and nro_linea <= LINEA_FIN_VIDEO_ACTIVO_ODD) :  
+            video_activo_y.next = True
+        else :
+            video_activo_y.next = False
+
+    @always_comb
+    def gen_video_activo() :
+        video_activo_o.next = video_activo_x & video_activo_y    # Parte util de la senal de video
+
+    @always(barrido_x, video_activo_x)
+    def gen_pixel_x() :                
+        if video_activo_x :
+            pixel_x_o.next = barrido_x - INICIO_X  
+        else :
+            pixel_x_o.next = 0  
+
+    
+    @always(nro_linea, video_activo_y, odd_even_i)
+    def gen_pixel_y() :
+        if video_activo_y :
+            if odd_even_i :
+                pixel_y_o.next = (nro_linea - LINEA_INI_VIDEO_ACTIVO_ODD) * 2    # el "* 2" es debido al barrido entrelazado y el campo impar tiene la primer linea  
+            else :
+                pixel_y_o.next = (nro_linea - LINEA_INI_VIDEO_ACTIVO_EVEN) * 2 + 1      
+        else :
+            pixel_y_o.next = 0
+
+    @always_comb
+    def conex_pix_ce_o() :
+        pix_ce_o.next = pix_ce
+
+    @always_comb
+    def gen_ini_frame() :
+        ini_frame_o.next = odd_even_i and ini_vs
+
+    return instances()
 
     pass
 
